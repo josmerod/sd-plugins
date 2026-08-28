@@ -280,7 +280,8 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   };
   const ids = ['fx-status', 'fx-list', 'fx-active', 'fx-set-active', 'fx-search'];
   for (const name of ['WPCharter', 'WPIlliterata']) {
-    ids.push('fx-install-' + name, 'fx-remove-' + name, 'fx-size-' + name + '-6', 'fx-size-' + name + '-14');
+    ids.push('fx-install-' + name, 'fx-remove-' + name, 'fx-size-' + name + '-6', 'fx-size-' + name + '-14',
+      'fx-preview-' + name, 'fx-previews-' + name, 'fx-all-' + name, 'fx-none-' + name);
   }
   const document = fakeDocument(ids);
   // The rows render their checkboxes with the checked attribute; reflect that.
@@ -292,7 +293,13 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   const downloads = [];
   const deletes = [];
   const mkdirs = [];
+  const uploads = [];
   const mkdirBefore = () => downloads.length === 0;
+  class FakeFormData {
+    constructor() { this.entries = {}; }
+    append(k, v, name) { this.entries[k] = { value: v, name }; }
+  }
+  class FakeBlob { constructor(parts) { this.parts = parts; } }
   const api = {
     async relay(method, url) {
       assert.equal(method, 'HEAD');
@@ -320,6 +327,10 @@ test('fonts installs selected sizes through redirects, sets the active family, a
       mkdirs.push({ name: form.get('name'), path: form.get('path') });
       return response({ status: 400, text: 'Folder already exists' });
     }
+    if (url.startsWith('/api/fonts/upload')) {
+      uploads.push({ family: options.body.entries.family.value, file: options.body.entries.file.name });
+      return response({ json: { ok: true } });
+    }
     if (url.startsWith('/api/fonts') && !url.includes('/delete')) return response({ json: { families: installedFamilies, maxFamilies: 128 } });
     if (url.startsWith('/api/fonts/delete')) {
       deletes.push(JSON.parse(options.body).family);
@@ -328,16 +339,30 @@ test('fonts installs selected sizes through redirects, sets the active family, a
     if (url.startsWith('/download?path=%2F.crosspoint%2Fsettings.json')) {
       return response({ text: '{"fontPointSize":12,"sdFontFamilyName":"WPCharter"}' });
     }
+    if (url.startsWith('/download?path=%2F.fonts%2F')) {
+      // Readback of an installed .cpfont for the registry refresh upload.
+      return response({ body: new Uint8Array([0x43, 0x50, 0x46, 0x4f, 0x4e, 0x54, 0, 0]).buffer });
+    }
     throw new Error('unexpected fetch: ' + url);
   }
 
-  const { render } = await loadPlugin('fonts/plugin.js', { document, fetch });
+  const { render } = await loadPlugin('fonts/plugin.js', {
+    document, fetch, FormData: FakeFormData, Blob: FakeBlob,
+  });
   await render({ innerHTML: '' }, api);
 
   assert.match(document.elements['fx-status'].textContent, /2 families available/);
   assert.equal(document.elements['fx-active'].value, 'WPCharter');
   assert.match(document.elements['fx-list'].innerHTML, /Installed 1\/2/);
-  assert.match(document.elements['fx-list'].innerHTML, /raw\.githubusercontent\.com\/example\/cp-fonts\/main\/previews\/WPIlliterata-14\.png/);
+
+  // Previews are lazy: nothing is loaded until the Preview button is pressed.
+  assert.equal(document.elements['fx-previews-WPIlliterata'].innerHTML, '');
+  await document.elements['fx-preview-WPIlliterata'].onclick();
+  assert.match(document.elements['fx-previews-WPIlliterata'].innerHTML,
+    /raw\.githubusercontent\.com\/example\/cp-fonts\/main\/previews\/WPIlliterata-14\.png/);
+  assert.equal(document.elements['fx-preview-WPIlliterata'].textContent, 'Hide');
+  await document.elements['fx-preview-WPIlliterata'].onclick();
+  assert.equal(document.elements['fx-previews-WPIlliterata'].innerHTML, '');
 
   // Install only the checked size; the family folder is created first (the
   // X4 Pro firmware's /api/fetch cannot create it), then the release
@@ -351,6 +376,14 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].url, 'https://objects.example.com/releases/download/fonts/WPIlliterata_14.cpfont');
   assert.equal(downloads[0].dest, '/.fonts/WPIlliterata/WPIlliterata_14.cpfont');
+
+  // The registry is refreshed by re-uploading the smallest of the files that
+  // were actually installed (the firmware's /api/fetch writes don't mark it),
+  // so the family shows up installed without a reboot. Size 6 was unchecked,
+  // so only _14 exists on the card.
+  assert.deepEqual(uploads, [{ family: 'WPIlliterata', file: 'WPIlliterata_14.cpfont' }]);
+  assert.match(document.elements['fx-status'].textContent, /Installed WPIlliterata \(1 sizes?\)/);
+  assert.match(document.elements['fx-status'].textContent, /Pick it under Settings > Font/);
 
   // Setting the active family rewrites settings.json but keeps other keys.
   document.elements['fx-active'].value = 'WPIlliterata';

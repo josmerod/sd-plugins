@@ -136,25 +136,48 @@ CrossPoint.registerPlugin(async (container, api) => {
     // lists whatever sizes it finds) rather than losing the old install.
     const wasInstalled = installed.has(fam.name) && installed.get(fam.name).size > 0;
     await ensureFamilyDir(fam.name);
-    let written = 0;
+    let done = 0;
     try {
-      for (let i = 0; i < files.length; i++) {
-        if (onProgress) onProgress(i, files.length);
-        const url = await resolveUrl(catalog.baseUrl + files[i].name);
-        const dest = dir + '/' + files[i].name;
+      for (const f of files) {
+        if (onProgress) onProgress(done, files, fam);
+        const url = await resolveUrl(catalog.baseUrl + f.name);
+        const dest = dir + '/' + f.name;
         const res = await api.fetchToSd(url, dest, {});
         if (res.error || (res.status && (res.status < 200 || res.status >= 300))) {
-          throw new Error('download failed for ' + files[i].name + ' (' + (res.status || res.error) + ')');
+          throw new Error('download failed for ' + f.name + ' (' + (res.status || res.error) + ')');
         }
-        written++;
+        done++;
       }
     } catch (e) {
-      if (!wasInstalled && written > 0) {
+      if (!wasInstalled && done > 0) {
         try { await removeFamily(fam.name); } catch (e2) {}
       }
       throw e;
     }
-    if (onProgress) onProgress(files.length, files.length);
+    if (onProgress) onProgress(done, files, fam);
+    return files;
+  }
+
+  // /api/fetch writes do not mark the font registry dirty on this firmware,
+  // so a family installed through it stays invisible to /api/fonts and to
+  // Settings > Font until a reboot. Re-uploading one already-installed file
+  // through /api/fonts/upload (the /fonts page path) marks the registry and
+  // triggers the rescan — the family shows up live, no reboot.
+  async function refreshRegistry(fam, installedFiles) {
+    const files = (installedFiles || []).slice().sort((a, b) => a.size - b.size);
+    if (!files.length) return false;
+    try {
+      const r = await fetch('/download?path=' + encodeURIComponent(FONTS_DIR + '/' + fam.name + '/' + files[0].name));
+      if (!r.ok) throw new Error('readback failed');
+      const fd = new FormData();
+      fd.append('family', fam.name);
+      fd.append('file', new Blob([await r.arrayBuffer()]), files[0].name);
+      const up = await fetch('/api/fonts/upload', { method: 'POST', body: fd });
+      if (!up.ok) throw new Error('upload failed (' + up.status + ')');
+      return true;
+    } catch (e) {
+      return false; // files are on the card; the reader just needs a restart
+    }
   }
 
   async function removeFamily(name) {
@@ -207,44 +230,84 @@ CrossPoint.registerPlugin(async (container, api) => {
     return ' <span style="color:#27ae60">Installed ' + of + (fam.sizes && have.size >= fam.sizes.length ? '' : ' sizes') + '</span>';
   }
 
+  const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+
+  function previewsHtml(fam) {
+    return (fam.previews || []).map((p) =>
+      '<a href="' + escapeHtml((catalog.rawBase || '') + p.path) + '" target="_blank" title="' + p.pt + 'pt — open full size">' +
+      '<img src="' + escapeHtml((catalog.rawBase || '') + p.path) + '" alt="' + escapeHtml(fam.name + ' ' + p.pt + 'pt') + '" ' +
+      'style="max-width:26%;min-width:110px;border:1px solid #ddd;border-radius:4px;margin:4px 6px 4px 0"></a>').join('');
+  }
+
   function renderList() {
     const families = (catalog && catalog.families) || [];
     const visible = families.filter(matches);
     listEl.innerHTML = visible.map((fam) => {
       const have = installed.get(fam.name);
       const sizes = fam.sizes || [];
-      const previews = (fam.previews || []).map((p) =>
-        '<a href="' + escapeHtml((catalog.rawBase || '') + p.path) + '" target="_blank" title="' + p.pt + 'pt — open full size">' +
-        '<img src="' + escapeHtml((catalog.rawBase || '') + p.path) + '" alt="' + escapeHtml(fam.name + ' ' + p.pt + 'pt') + '" ' +
-        'style="max-width:26%;min-width:110px;border:1px solid #ddd;border-radius:4px;margin:4px 6px 4px 0"></a>').join('');
+      const total = (fam.files || []).reduce((n, f) => n + f.size, 0);
       return '<div class="setting-row">' +
         '<span class="setting-name"><strong>' + escapeHtml(fam.title || fam.name) + '</strong>' +
         installedLabel(fam) +
         '<br><span style="color:#666">' + escapeHtml(fam.description || '') + '</span>' +
-        '<br><span style="color:#666">' + escapeHtml((fam.styles || []).join(' ')) + ' · ' + escapeHtml(fam.license || '') + '</span></span>' +
+        '<br><span style="color:#666">' + escapeHtml((fam.styles || []).join(' ')) + ' · ' + escapeHtml(fam.license || '') +
+        ' · ' + sizes.length + ' sizes · ' + mb(total) + '</span></span>' +
         '<span class="setting-control">' +
+        '<button type="button" class="btn-small" id="fx-preview-' + escapeHtml(fam.name) + '">Preview</button> ' +
         '<button type="button" class="btn-small btn-add" id="fx-install-' + escapeHtml(fam.name) + '">' +
         (have && have.size ? 'Reinstall' : 'Install') + '</button>' +
         (have && have.size ? ' <button type="button" class="btn-small" id="fx-remove-' + escapeHtml(fam.name) + '">Remove</button>' : '') +
         '</span></div>' +
-        (previews || '') +
-        '<div style="margin:2px 0 10px">' + sizes.map((pt) =>
-          '<label style="margin-right:8px;white-space:nowrap"><input type="checkbox" id="fx-size-' + escapeHtml(fam.name) + '-' + pt + '" checked> ' + pt + '</label>').join('') + '</div>';
+        '<div style="margin:2px 0 4px;font-size:0.92em">' + sizes.map((pt) =>
+          '<label style="margin-right:8px;white-space:nowrap"><input type="checkbox" id="fx-size-' + escapeHtml(fam.name) + '-' + pt + '" checked> ' + pt + '</label>').join('') +
+        ' <a href="#" id="fx-all-' + escapeHtml(fam.name) + '">all</a> / <a href="#" id="fx-none-' + escapeHtml(fam.name) + '">none</a></div>' +
+        '<div id="fx-previews-' + escapeHtml(fam.name) + '"></div>';
     }).join('') || '<p style="color:#888">No font families match.</p>';
 
     for (const fam of visible) {
+      const sizes = fam.sizes || [];
+      const setAll = (v) => {
+        for (const pt of sizes) {
+          const cb = document.getElementById('fx-size-' + fam.name + '-' + pt);
+          if (cb) cb.checked = v;
+        }
+      };
+      document.getElementById('fx-all-' + fam.name).onclick = (e) => { if (e) e.preventDefault(); setAll(true); };
+      document.getElementById('fx-none-' + fam.name).onclick = (e) => { if (e) e.preventDefault(); setAll(false); };
+
+      // Previews load on demand — a catalog with many families must not pull
+      // every preview image on page open.
+      const pvBtn = document.getElementById('fx-preview-' + fam.name);
+      pvBtn.onclick = () => {
+        const box = document.getElementById('fx-previews-' + fam.name);
+        if (box.innerHTML) { box.innerHTML = ''; pvBtn.textContent = 'Preview'; }
+        else { box.innerHTML = previewsHtml(fam); pvBtn.textContent = 'Hide'; }
+      };
+
       const btn = document.getElementById('fx-install-' + fam.name);
       btn.onclick = async () => {
         btn.disabled = true;
         status('Installing ' + fam.title + '…');
         try {
-          const pts = (fam.sizes || []).filter((pt) => {
+          const pts = sizes.filter((pt) => {
             const cb = document.getElementById('fx-size-' + fam.name + '-' + pt);
             return !cb || cb.checked;
           });
-          await installSizes(fam, pts, (done, total) => { btn.textContent = done + '/' + total; });
+          const t0 = Date.now();
+          const installedFiles = await installSizes(fam, pts, (done, files, f) => {
+            const doneBytes = files.reduce((n, x, i) => n + (i < done ? x.size : 0), 0);
+            const totalBytes = files.reduce((n, x) => n + x.size, 0);
+            btn.textContent = done + '/' + files.length;
+            status('Installing ' + f.title + '… ' + done + '/' + files.length + ' · ' + mb(doneBytes) + ' of ' + mb(totalBytes));
+          });
+          const refreshed = await refreshRegistry(fam, installedFiles);
           await loadInstalled();
-          status('Installed ' + fam.title + ' → ' + FONTS_DIR + '/' + fam.name + '/. Pick it under Settings > Font on the reader.');
+          const n = pts.length;
+          status('Installed ' + fam.title + ' (' + n + ' sizes) → ' + FONTS_DIR + '/' + fam.name + '/ in ' +
+            Math.round((Date.now() - t0) / 1000) + 's. ' +
+            (refreshed
+              ? 'Pick it under Settings > Font on the reader.'
+              : 'Restart the reader to see it under Settings > Font.'));
           renderActive(activeSel.value);
           renderList();
         } catch (e) {

@@ -7,7 +7,15 @@ sizes to install (6–18), and pick the active family. Built to consume a
 curated [WP-Fonts](https://github.com/Chairzard/WP-Fonts) families.
 
 The previews are page renders from the reader's own renderer (geometry `x4`),
-so what you see is what the device draws.
+so what you see is what the device draws. They load on demand — press
+*Preview* on a family — so a large catalog stays fast to open.
+
+Two firmware quirks this plugin works around on the X4 Pro release firmware:
+`/api/fetch` cannot create missing destination folders (the plugin creates
+`/.fonts/<Familia>/` itself), and its writes don't mark the font registry
+dirty (after installing, the plugin re-uploads the smallest installed file
+through `/api/fonts/upload`, which marks it — so the family appears under
+Settings → Font live, without a reboot).
 
 ## Install the plugin
 

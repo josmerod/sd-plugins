@@ -291,6 +291,8 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   const writes = [];
   const downloads = [];
   const deletes = [];
+  const mkdirs = [];
+  const mkdirBefore = () => downloads.length === 0;
   const api = {
     async relay(method, url) {
       assert.equal(method, 'HEAD');
@@ -311,6 +313,13 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   };
   async function fetch(url, options = {}) {
     if (url.startsWith('https://raw.githubusercontent.com/')) return response({ json: catalog });
+    if (url === '/mkdir') {
+      // Record the folder creations; assert they happen before any download.
+      const form = new URLSearchParams(options.body);
+      assert.equal(mkdirBefore(), true, 'mkdir must run before the first fetchToSd');
+      mkdirs.push({ name: form.get('name'), path: form.get('path') });
+      return response({ status: 400, text: 'Folder already exists' });
+    }
     if (url.startsWith('/api/fonts') && !url.includes('/delete')) return response({ json: { families: installedFamilies, maxFamilies: 128 } });
     if (url.startsWith('/api/fonts/delete')) {
       deletes.push(JSON.parse(options.body).family);
@@ -330,9 +339,15 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   assert.match(document.elements['fx-list'].innerHTML, /Installed 1\/2/);
   assert.match(document.elements['fx-list'].innerHTML, /raw\.githubusercontent\.com\/example\/cp-fonts\/main\/previews\/WPIlliterata-14\.png/);
 
-  // Install only the checked size; the release redirect is resolved first.
+  // Install only the checked size; the family folder is created first (the
+  // X4 Pro firmware's /api/fetch cannot create it), then the release
+  // redirect is resolved.
   document.elements['fx-size-WPIlliterata-6'].checked = false;
   await document.elements['fx-install-WPIlliterata'].onclick();
+  assert.deepEqual(mkdirs, [
+    { name: '.fonts', path: '/' },
+    { name: 'WPIlliterata', path: '/.fonts' },
+  ]);
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].url, 'https://objects.example.com/releases/download/fonts/WPIlliterata_14.cpfont');
   assert.equal(downloads[0].dest, '/.fonts/WPIlliterata/WPIlliterata_14.cpfont');

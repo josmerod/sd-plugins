@@ -53,6 +53,24 @@ CrossPoint.registerPlugin(async (container, api) => {
     return btoa(bin);
   }
 
+  async function post(path, params) {
+    return fetch(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(params).toString(),
+    });
+  }
+
+  // Some firmware builds' /api/fetch fails with "cannot create file" when the
+  // destination folder is missing (the recursive-parents fix is newer than the
+  // X4 Pro release firmware). /mkdir exists on every build, so create both
+  // levels here — tolerantly: "already exists" (400) and even a transient
+  // failure are ignored; a genuinely missing folder will still surface through
+  // the fetch error that follows.
+  async function ensureFamilyDir(name) {
+    try { await post('/mkdir', { name: '.fonts', path: '/' }); } catch (e) {}
+    try { await post('/mkdir', { name: name, path: FONTS_DIR }); } catch (e) {}
+  }
+
   // --- catalog + installed state -------------------------------------------
   async function loadCatalog() {
     // The browser usually reaches GitHub directly (raw.githubusercontent.com
@@ -117,6 +135,7 @@ CrossPoint.registerPlugin(async (container, api) => {
     // family leaves its new sizes in place (they are additive — the reader
     // lists whatever sizes it finds) rather than losing the old install.
     const wasInstalled = installed.has(fam.name) && installed.get(fam.name).size > 0;
+    await ensureFamilyDir(fam.name);
     let written = 0;
     try {
       for (let i = 0; i < files.length; i++) {
@@ -195,8 +214,9 @@ CrossPoint.registerPlugin(async (container, api) => {
       const have = installed.get(fam.name);
       const sizes = fam.sizes || [];
       const previews = (fam.previews || []).map((p) =>
+        '<a href="' + escapeHtml((catalog.rawBase || '') + p.path) + '" target="_blank" title="' + p.pt + 'pt — open full size">' +
         '<img src="' + escapeHtml((catalog.rawBase || '') + p.path) + '" alt="' + escapeHtml(fam.name + ' ' + p.pt + 'pt') + '" ' +
-        'style="max-width:100%;border:1px solid #ddd;border-radius:4px;margin:4px 0">').join('');
+        'style="max-width:26%;min-width:110px;border:1px solid #ddd;border-radius:4px;margin:4px 6px 4px 0"></a>').join('');
       return '<div class="setting-row">' +
         '<span class="setting-name"><strong>' + escapeHtml(fam.title || fam.name) + '</strong>' +
         installedLabel(fam) +

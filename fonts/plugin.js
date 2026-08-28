@@ -140,9 +140,17 @@ CrossPoint.registerPlugin(async (container, api) => {
     try {
       for (const f of files) {
         if (onProgress) onProgress(done, files, fam);
-        const url = await resolveUrl(catalog.baseUrl + f.name);
-        const dest = dir + '/' + f.name;
-        const res = await api.fetchToSd(url, dest, {});
+        const destFile = dir + '/' + f.name;
+        let res = await api.fetchToSd(catalog.baseUrl + f.name, destFile, {});
+        if (res.error || (res.status && (res.status < 200 || res.status >= 300))) {
+          // A catalog backed by redirecting URLs (e.g. GitHub releases):
+          // /api/fetch does not follow redirects, so resolve the hops via the
+          // relay and retry once. Each extra hop costs the reader a full TLS
+          // handshake, which is why the catalog's baseUrl points at a host
+          // that answers 200 directly.
+          const url = await resolveUrl(catalog.baseUrl + f.name);
+          res = await api.fetchToSd(url, destFile, {});
+        }
         if (res.error || (res.status && (res.status < 200 || res.status >= 300))) {
           throw new Error('download failed for ' + f.name + ' (' + (res.status || res.error) + ')');
         }

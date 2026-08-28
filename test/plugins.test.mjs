@@ -314,6 +314,10 @@ test('fonts installs selected sizes through redirects, sets the active family, a
     },
     async fetchToSd(url, dest) {
       downloads.push({ url, dest });
+      if (url.includes('github.com/example')) {
+        // The release URL redirects; /api/fetch does not follow it.
+        return { status: 502, error: 'download failed' };
+      }
       installedFamilies.push({ name: dest.split('/')[2], sizes: [14], files: [] });
       return { status: 200, bytes: 1000, complete: true };
     },
@@ -373,9 +377,12 @@ test('fonts installs selected sizes through redirects, sets the active family, a
     { name: '.fonts', path: '/' },
     { name: 'WPIlliterata', path: '/.fonts' },
   ]);
-  assert.equal(downloads.length, 1);
-  assert.equal(downloads[0].url, 'https://objects.example.com/releases/download/fonts/WPIlliterata_14.cpfont');
-  assert.equal(downloads[0].dest, '/.fonts/WPIlliterata/WPIlliterata_14.cpfont');
+  // Direct fetch fails on the redirecting release URL, the redirect is
+  // resolved via the relay, and the retry streams to SD.
+  assert.equal(downloads.length, 2);
+  assert.equal(downloads[0].url, 'https://github.com/example/releases/download/fonts/WPIlliterata_14.cpfont');
+  assert.equal(downloads[1].url, 'https://objects.example.com/releases/download/fonts/WPIlliterata_14.cpfont');
+  assert.equal(downloads[1].dest, '/.fonts/WPIlliterata/WPIlliterata_14.cpfont');
 
   // The registry is refreshed by re-uploading the smallest of the files that
   // were actually installed (the firmware's /api/fetch writes don't mark it),

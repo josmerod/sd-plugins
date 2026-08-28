@@ -117,7 +117,7 @@ class TinyDomParser {
 }
 
 test('all plugin manifests satisfy the manifest contract', async () => {
-  const plugins = ['hello', 'organize-by-author', 'protected-content', 'dictionaries'];
+  const plugins = ['hello', 'organize-by-author', 'protected-content', 'dictionaries', 'fonts'];
   for (const plugin of plugins) {
     const manifest = JSON.parse(await readFile(new URL(plugin + '/manifest.json', root), 'utf8'));
     assert.equal(typeof manifest.title, 'string', plugin + ' needs a title');
@@ -255,6 +255,100 @@ test('dictionaries installs through redirects and sets the active dictionary wit
   const saved = JSON.parse(writes[0].data);
   assert.equal(saved.dictionaryName, 'eng-deu');
   assert.equal(saved.fontPointSize, 12);
+});
+
+test('fonts installs selected sizes through redirects, sets the active family, and removes a family', async () => {
+  const fam = (name, files) => ({
+    name, title: name, description: name + ' desc', license: 'OFL',
+    styles: ['regular', 'bold'], sizes: files.map((f) => f.pt), files,
+    previews: [{ pt: 14, path: `previews/${name}-14.png` }], totalBytes: 3,
+  });
+  const catalog = {
+    version: 1,
+    baseUrl: 'https://github.com/example/releases/download/fonts/',
+    rawBase: 'https://raw.githubusercontent.com/example/cp-fonts/main/',
+    families: [
+      fam('WPCharter', [
+        { name: 'WPCharter_6.cpfont', pt: 6, size: 100, crc32: 1 },
+        { name: 'WPCharter_14.cpfont', pt: 14, size: 200, crc32: 2 },
+      ]),
+      fam('WPIlliterata', [
+        { name: 'WPIlliterata_6.cpfont', pt: 6, size: 100, crc32: 3 },
+        { name: 'WPIlliterata_14.cpfont', pt: 14, size: 200, crc32: 4 },
+      ]),
+    ],
+  };
+  const ids = ['fx-status', 'fx-list', 'fx-active', 'fx-set-active', 'fx-search'];
+  for (const name of ['WPCharter', 'WPIlliterata']) {
+    ids.push('fx-install-' + name, 'fx-remove-' + name, 'fx-size-' + name + '-6', 'fx-size-' + name + '-14');
+  }
+  const document = fakeDocument(ids);
+  // The rows render their checkboxes with the checked attribute; reflect that.
+  for (const id of ids.filter((i) => i.startsWith('fx-size-'))) document.elements[id].checked = true;
+
+  // Stateful /api/fonts: WPIlliterata appears once its size is installed.
+  const installedFamilies = [{ name: 'WPCharter', sizes: [6], files: [] }];
+  const writes = [];
+  const downloads = [];
+  const deletes = [];
+  const api = {
+    async relay(method, url) {
+      assert.equal(method, 'HEAD');
+      if (url.includes('github.com/example')) {
+        return { status: 302, body: '', headers: [['Location', url.replace('github.com/example', 'objects.example.com')]] };
+      }
+      return { status: 200, body: '', headers: [] };
+    },
+    async writeFile(path, dataB64) {
+      writes.push({ path, data: Buffer.from(dataB64, 'base64').toString('utf8') });
+      return { ok: true, bytes: dataB64.length };
+    },
+    async fetchToSd(url, dest) {
+      downloads.push({ url, dest });
+      installedFamilies.push({ name: dest.split('/')[2], sizes: [14], files: [] });
+      return { status: 200, bytes: 1000, complete: true };
+    },
+  };
+  async function fetch(url, options = {}) {
+    if (url.startsWith('https://raw.githubusercontent.com/')) return response({ json: catalog });
+    if (url.startsWith('/api/fonts') && !url.includes('/delete')) return response({ json: { families: installedFamilies, maxFamilies: 128 } });
+    if (url.startsWith('/api/fonts/delete')) {
+      deletes.push(JSON.parse(options.body).family);
+      return response({ json: { ok: true } });
+    }
+    if (url.startsWith('/download?path=%2F.crosspoint%2Fsettings.json')) {
+      return response({ text: '{"fontPointSize":12,"sdFontFamilyName":"WPCharter"}' });
+    }
+    throw new Error('unexpected fetch: ' + url);
+  }
+
+  const { render } = await loadPlugin('fonts/plugin.js', { document, fetch });
+  await render({ innerHTML: '' }, api);
+
+  assert.match(document.elements['fx-status'].textContent, /2 families available/);
+  assert.equal(document.elements['fx-active'].value, 'WPCharter');
+  assert.match(document.elements['fx-list'].innerHTML, /Installed 1\/2/);
+  assert.match(document.elements['fx-list'].innerHTML, /raw\.githubusercontent\.com\/example\/cp-fonts\/main\/previews\/WPIlliterata-14\.png/);
+
+  // Install only the checked size; the release redirect is resolved first.
+  document.elements['fx-size-WPIlliterata-6'].checked = false;
+  await document.elements['fx-install-WPIlliterata'].onclick();
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].url, 'https://objects.example.com/releases/download/fonts/WPIlliterata_14.cpfont');
+  assert.equal(downloads[0].dest, '/.fonts/WPIlliterata/WPIlliterata_14.cpfont');
+
+  // Setting the active family rewrites settings.json but keeps other keys.
+  document.elements['fx-active'].value = 'WPIlliterata';
+  await document.elements['fx-set-active'].onclick();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].path, '/.crosspoint/settings.json');
+  const saved = JSON.parse(writes[0].data);
+  assert.equal(saved.sdFontFamilyName, 'WPIlliterata');
+  assert.equal(saved.fontPointSize, 12);
+
+  // Remove deletes the whole family via the device endpoint.
+  await document.elements['fx-remove-WPIlliterata'].onclick();
+  assert.deepEqual(deletes, ['WPIlliterata']);
 });
 
 test('protected content restores content.key, writes rights first, and fulfills without rewriting credentials', async () => {

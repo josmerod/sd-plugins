@@ -69,6 +69,11 @@ Reconnect to the device web UI; the plugin's card appears on its page. A
   or from the web page; files land as loose StarDict files in
   `/dictionaries/<name>/`. The web page can also set the active dictionary
   (`dictionaryName` in settings.json).
+- `fonts/` — a Settings plugin that installs precompiled `.cpfont` families
+  (6–18 pt, CrossGlyph builds of curated WP-Fonts) from a catalog repo into
+  `/.fonts/<Familia>/`: previews rendered by the reader's own renderer,
+  per-size selection, active-family picker (`sdFontFamilyName`). Catalog and
+  builds are produced by the companion cp-fonts repo.
 - `wallabag/` — a Settings plugin + `device.json` pair: read your Wallabag
   "read it later" articles on the device (Wallabag exports each as EPUB, so no
   conversion). Enter server URL + API client + login in the web page; the

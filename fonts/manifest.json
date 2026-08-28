@@ -1,0 +1,7 @@
+{
+  "title": "Fonts",
+  "mount": "settings",
+  "description": "Install precompiled .cpfont families (6-18pt) from a catalog, preview them, and pick the active one.",
+  "author": "josem",
+  "version": "0.1.0"
+}

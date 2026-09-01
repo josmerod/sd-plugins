@@ -258,10 +258,12 @@ test('dictionaries installs through redirects and sets the active dictionary wit
 });
 
 test('fonts installs selected sizes through redirects, sets the active family, and removes a family', async () => {
-  const fam = (name, files) => ({
+  const fam = (name, files, extra = {}) => ({
     name, title: name, description: name + ' desc', license: 'OFL',
+    licenseUrl: 'https://raw.githubusercontent.com/example/cp-fonts/main/licenses/' + name + '-OFL.txt',
     styles: ['regular', 'bold'], sizes: files.map((f) => f.pt), files,
     previews: [{ pt: 14, path: `previews/${name}-14.png` }], totalBytes: 3,
+    ...extra,
   });
   const catalog = {
     version: 1,
@@ -271,14 +273,14 @@ test('fonts installs selected sizes through redirects, sets the active family, a
       fam('WPCharter', [
         { name: 'WPCharter_6.cpfont', pt: 6, size: 100, crc32: 1 },
         { name: 'WPCharter_14.cpfont', pt: 14, size: 200, crc32: 2 },
-      ]),
+      ], { group: 'Serif' }),
       fam('WPIlliterata', [
         { name: 'WPIlliterata_6.cpfont', pt: 6, size: 100, crc32: 3 },
         { name: 'WPIlliterata_14.cpfont', pt: 14, size: 200, crc32: 4 },
-      ]),
+      ], { group: 'Sans', license: 'GPL' }),
     ],
   };
-  const ids = ['fx-status', 'fx-list', 'fx-active', 'fx-set-active', 'fx-search'];
+  const ids = ['fx-status', 'fx-list', 'fx-active', 'fx-set-active', 'fx-search', 'fx-license'];
   for (const name of ['WPCharter', 'WPIlliterata']) {
     ids.push('fx-install-' + name, 'fx-remove-' + name, 'fx-size-' + name + '-6', 'fx-size-' + name + '-14',
       'fx-preview-' + name, 'fx-previews-' + name, 'fx-all-' + name, 'fx-none-' + name);
@@ -358,6 +360,24 @@ test('fonts installs selected sizes through redirects, sets the active family, a
   assert.match(document.elements['fx-status'].textContent, /2 families available/);
   assert.equal(document.elements['fx-active'].value, 'WPCharter');
   assert.match(document.elements['fx-list'].innerHTML, /Installed 1\/2/);
+
+  // Families render inside collapsible category groups, Serif first, and the
+  // license badge links to the license file.
+  const listHtml = document.elements['fx-list'].innerHTML;
+  assert.match(listHtml, /<strong>Serif<\/strong> · 1/);
+  assert.match(listHtml, /<strong>Sans<\/strong> · 1/);
+  assert.ok(listHtml.indexOf('<strong>Serif</strong>') < listHtml.indexOf('<strong>Sans</strong>'));
+  assert.match(listHtml, /href="https:\/\/raw\.githubusercontent\.com\/example\/cp-fonts\/main\/licenses\/WPIlliterata-OFL\.txt"/);
+
+  // The license dropdown filters by license type.
+  assert.match(document.elements['fx-license'].innerHTML, /GPL/);
+  document.elements['fx-license'].value = 'GPL';
+  await document.elements['fx-license'].onchange();
+  let filtered = document.elements['fx-list'].innerHTML;
+  assert.match(filtered, /WPIlliterata/);
+  assert.doesNotMatch(filtered, /fx-install-WPCharter/);
+  document.elements['fx-license'].value = '';
+  await document.elements['fx-license'].onchange();
 
   // Previews are lazy: nothing is loaded until the Preview button is pressed.
   assert.equal(document.elements['fx-previews-WPIlliterata'].innerHTML, '');

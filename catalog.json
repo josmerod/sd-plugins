@@ -34,7 +34,7 @@
       "title": "Fonts",
       "description": "Install precompiled .cpfont families (6-18pt) from a catalog, preview them, and pick the active one.",
       "author": "josem",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "base": "https://raw.githubusercontent.com/josmerod/sd-plugins/main/fonts/",
       "files": [
         "manifest.json",

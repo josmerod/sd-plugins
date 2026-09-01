@@ -20,6 +20,7 @@ CrossPoint.registerPlugin(async (container, api) => {
   let installed = new Map(); // family name -> Set(sizes) present on the reader
   let maxFamilies = 0;
   let filter = '';
+  let licenseFilter = '';
 
   container.innerHTML =
     '<h2>Fonts</h2>' +
@@ -31,7 +32,8 @@ CrossPoint.registerPlugin(async (container, api) => {
     '<p style="color:#666">You can also switch families on the device under Settings &gt; Font — that applies immediately; writing the file here applies after a restart.</p>' +
     '<h3 style="margin:0.8em 0 0.2em">Available families</h3>' +
     '<div class="setting-row"><span class="setting-control">' +
-    '<input type="text" id="fx-search" placeholder="Filter, e.g. charter or ofl" style="width:100%"></span></div>' +
+    '<input type="text" id="fx-search" placeholder="Filter, e.g. charter or ofl" style="width:60%"></span>' +
+    '<span class="setting-control"><select id="fx-license" style="width:38%"></select></span></div>' +
     '<div id="fx-list"></div>' +
     '<p style="color:#666">Families install to <code>/.fonts/&lt;Familia&gt;/</code> and appear in the reader\'s Settings &gt; Font picker without a reboot. ' +
     'Sizes are per-file bitmaps: leave the ones you use checked — each is a few hundred KB. ' +
@@ -225,10 +227,20 @@ CrossPoint.registerPlugin(async (container, api) => {
   };
 
   // --- family list ---------------------------------------------------------
+  const GROUP_ORDER = ['Serif', 'Slab', 'Sans', 'Mono', 'Display', 'Other'];
+
   function matches(fam) {
+    if (licenseFilter && (fam.license || '') !== licenseFilter) return false;
     if (!filter) return true;
     const hay = (fam.name + ' ' + fam.title + ' ' + (fam.license || '')).toLowerCase();
     return filter.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+  }
+
+  function licenseHtml(fam) {
+    const lic = fam.license || '';
+    return fam.licenseUrl
+      ? '<a href="' + escapeHtml(fam.licenseUrl) + '" target="_blank" title="license text" style="color:inherit">' + escapeHtml(lic) + '</a>'
+      : escapeHtml(lic);
   }
 
   function installedLabel(fam) {
@@ -250,7 +262,21 @@ CrossPoint.registerPlugin(async (container, api) => {
   function renderList() {
     const families = (catalog && catalog.families) || [];
     const visible = families.filter(matches);
-    listEl.innerHTML = visible.map((fam) => {
+    // Collapsible category groups keep a large catalog navigable; an active
+    // filter re-opens the groups that still hold matches.
+    const groups = new Map();
+    for (const fam of visible) {
+      const g = fam.group || 'Other';
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(fam);
+    }
+    const order = [...groups.keys()].sort((a, b) => {
+      const key = (x) => { const i = GROUP_ORDER.indexOf(x); return i < 0 ? GROUP_ORDER.length : i; };
+      return key(a) - key(b);
+    });
+    const filtering = !!(filter || licenseFilter);
+
+    const row = (fam) => {
       const have = installed.get(fam.name);
       const sizes = fam.sizes || [];
       const total = (fam.files || []).reduce((n, f) => n + f.size, 0);
@@ -258,7 +284,7 @@ CrossPoint.registerPlugin(async (container, api) => {
         '<span class="setting-name"><strong>' + escapeHtml(fam.title || fam.name) + '</strong>' +
         installedLabel(fam) +
         '<br><span style="color:#666">' + escapeHtml(fam.description || '') + '</span>' +
-        '<br><span style="color:#666">' + escapeHtml((fam.styles || []).join(' ')) + ' · ' + escapeHtml(fam.license || '') +
+        '<br><span style="color:#666">' + escapeHtml((fam.styles || []).join(' ')) + ' · ' + licenseHtml(fam) +
         ' · ' + sizes.length + ' sizes · ' + mb(total) + '</span></span>' +
         '<span class="setting-control">' +
         '<button type="button" class="btn-small" id="fx-preview-' + escapeHtml(fam.name) + '">Preview</button> ' +
@@ -270,7 +296,13 @@ CrossPoint.registerPlugin(async (container, api) => {
           '<label style="margin-right:8px;white-space:nowrap"><input type="checkbox" id="fx-size-' + escapeHtml(fam.name) + '-' + pt + '" checked> ' + pt + '</label>').join('') +
         ' <a href="#" id="fx-all-' + escapeHtml(fam.name) + '">all</a> / <a href="#" id="fx-none-' + escapeHtml(fam.name) + '">none</a></div>' +
         '<div id="fx-previews-' + escapeHtml(fam.name) + '"></div>';
-    }).join('') || '<p style="color:#888">No font families match.</p>';
+    };
+
+    listEl.innerHTML = order.map((g) =>
+      '<details style="margin:6px 0"' + (filtering ? ' open' : '') + '>' +
+      '<summary style="cursor:pointer;padding:4px 0"><strong>' + escapeHtml(g) + '</strong> · ' + groups.get(g).length + '</summary>' +
+      groups.get(g).map(row).join('') + '</details>').join('') ||
+      '<p style="color:#888">No font families match.</p>';
 
     for (const fam of visible) {
       const sizes = fam.sizes || [];
@@ -348,6 +380,20 @@ CrossPoint.registerPlugin(async (container, api) => {
     renderList();
   };
 
+  const licenseSel = document.getElementById('fx-license');
+  licenseSel.onchange = function () {
+    licenseFilter = this.value;
+    renderList();
+  };
+
+  function renderLicenseFilter() {
+    const families = (catalog && catalog.families) || [];
+    const licenses = [...new Set(families.map((f) => f.license || '').filter(Boolean))].sort();
+    licenseSel.innerHTML = '<option value="">All licenses</option>' +
+      licenses.map((l) => '<option value="' + escapeHtml(l) + '"' + (l === licenseFilter ? ' selected' : '') + '>' +
+        escapeHtml(l) + '</option>').join('');
+  }
+
   // --- boot ----------------------------------------------------------------
   try {
     await loadInstalled();
@@ -355,6 +401,7 @@ CrossPoint.registerPlugin(async (container, api) => {
     try { current = (await readSettings()).sdFontFamilyName || ''; } catch (e) {}
     renderActive(current);
     catalog = await loadCatalog();
+    renderLicenseFilter();
     const n = (catalog.families || []).length;
     status(n + ' families available.' +
       (maxFamilies && installed.size >= maxFamilies ? ' Family limit reached (' + maxFamilies + ') — remove one first.' : ''));
